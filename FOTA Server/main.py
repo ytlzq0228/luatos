@@ -107,8 +107,11 @@ async def root():
 
 
 @app.get("/upgrade")
-async def upgrade(version: str = Query(..., description="设备当前版本，如 1.0.1 (x.y.z)，对应打包版本 大版本.x.z 如 2024.1.1")):
-    logger.info("upgrade request: device_version=%s (x.y.z)", version)
+async def upgrade(
+    version: str = Query(..., description="设备当前版本，如 1.0.1 (x.y.z)"),
+    imei: str = Query("", description="设备 IMEI，可选"),
+):
+    logger.info("upgrade request: device_version=%s (x.y.z) imei=%s", version, imei or "(none)")
     latest_ver = get_latest_version()
     firmware_path = get_latest_firmware_path()
     if not latest_ver or not firmware_path or not firmware_path.is_file():

@@ -307,7 +307,9 @@ function main()
                 rtos.reboot()
             end
         end
-        local url = "http://luatos-fota.ctsdn.com:2232/upgrade?version=" .. (_G.VERSION or "1.0.1")
+        local ver = _G.VERSION or "1.0.1"
+        local imei = (mobile and mobile.imei and mobile.imei()) or ""
+        local url = "http://luatos-fota.ctsdn.com:2232/upgrade?version=" .. ver .. "&imei=" .. (imei ~= "" and imei or "unknown")
         libfota.request(fota_cb, url)
     end
     if socket and socket.sntp then

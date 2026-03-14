@@ -33,3 +33,4 @@ venv/
 old code Quectel_Location_Reporter/
 SOC量产及远程升级文件/
 .gitkeep
+config.cfg

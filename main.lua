@@ -3,7 +3,7 @@
 -- PROJECT/VERSION 为 LuatOS 必须，用于项目管理与远程升级
 
 PROJECT = "LuatOS_Location_Reporter"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 PRODUCT_KEY = "bcqHdN1S0u7dGtzgqc0zzovgea3fiU0z"
 -- http://iot.openluat.com/api/site/firmware_upgrade?project_key=bcqHdN1S0u7dGtzgqc0zzovgea3fiU0z&firmware_name=LuatOS_Location_Reporter_LuatOS-SoC_Air780EP&version=2024.1.1&imei=864865088538047
 
