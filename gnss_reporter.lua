@@ -35,6 +35,9 @@ local battery = require("battery")
 local cell_info = require("cell_info")
 local traccar_report = require("traccar_report")
 local aprs_report = require("aprs_report")
+-- FOTA：合宙 IoT 平台，上电联网后执行一次
+local libfota_ok, libfota = pcall(require, "libfota")
+if not libfota_ok then libfota = nil end
 -- 外置看门狗 Air153C，GPIO28，需显式 require 并每 150 秒喂狗，否则设备会重启
 local wtd_ok, air153C_wtd = pcall(require, "air153C_wtd")
 if not wtd_ok then air153C_wtd = nil end
@@ -294,6 +297,19 @@ function main()
     end
     log.info("GNSS", "network ready")
     gpio.set(PIN_NET_LED, 1)
+    -- 联网后执行一次 FOTA（自建服务器）
+    if libfota and libfota.request then
+        local function fota_cb(result)
+            -- 0=成功 1=连接失败 2=url错误 3=服务器断开 4=接收错误 5=VERSION需xxx.yyy.zzz或缺少PRODUCT_KEY
+            log.info("GNSS", "FOTA result: " .. tostring(result))
+            if result == 0 then
+                log.info("GNSS", "FOTA success, rebooting...")
+                rtos.reboot()
+            end
+        end
+        local url = "http://luatos-fota.ctsdn.com:2232/upgrade?version=" .. (_G.VERSION or "1.0.1")
+        libfota.request(fota_cb, url)
+    end
     if socket and socket.sntp then
         socket.sntp()
         sys.waitUntil("NTP_UPDATE", 10000)

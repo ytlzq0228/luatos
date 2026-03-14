@@ -1,0 +1,15 @@
+[Unit]
+Description=LuatOS FOTA Server
+After=network.target
+
+[Service]
+Type=simple
+User=ytlzq0228
+Group=ytlzq0228
+WorkingDirectory=/opt/LutOS-FOTA
+ExecStart=/opt/LutOS-FOTA/.venv/bin/python /opt/LutOS-FOTA/main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
