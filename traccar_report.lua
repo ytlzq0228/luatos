@@ -8,7 +8,7 @@ local BACKUP_INTERVAL_MS = 30 * 1000
 local RETRY_BACKOFF_BASE_SEC = 5
 local SEND_OK = true
 local SEND_RETRY = "retry"
-local RETRYABLE_HTTP = {400, 408, 429, 500, 502, 503, 504}
+local RETRYABLE_HTTP = {408, 429, 500, 502, 503, 504}
 
 local queue = {}
 local consumer_params = nil  -- {host, port, device_id, timeout_s, max_backoff}
