@@ -225,8 +225,9 @@ function start_consumer(cfg)
         end
     end
     -- libnet 同步连接必须在 sysplus.taskInitEx 创建的任务中运行
+    -- taskInitEx 参数顺序：fun, taskName [, cbFun, ...]
     if sysplus and sysplus.taskInitEx then
-        sysplus.taskInitEx(APRS_TASK_NAME, consumer_loop)
+        sysplus.taskInitEx(consumer_loop, APRS_TASK_NAME)
     else
         sys.taskInit(consumer_loop)
     end
