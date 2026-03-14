@@ -192,6 +192,8 @@ function load_config()
         test_speed = _float_val(cfg.test_speed, 0),
         test_course = _float_val(cfg.test_course, 156),
         test_accuracy = _float_val(cfg.test_accuracy, 12),
+        -- FOTA：留空则不请求升级
+        fota_url = (cfg.fota_url or ""):gsub("^%s*(.-)%s*$", "%1"),
     }
 end
 

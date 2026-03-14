@@ -226,6 +226,7 @@ local function build_traccar_payload(device_id, lat, lon)
     if v then payload.batteryVoltage = v end
     if extra_cache.rssi then payload.rssi = extra_cache.rssi end
     if extra_cache.cell then payload.cell = extra_cache.cell end
+    payload.version = _G.VERSION or ""
     return payload
 end
 
@@ -240,6 +241,7 @@ local function build_traccar_status_payload(device_id)
     if v then payload.batteryVoltage = v end
     if extra_cache.rssi then payload.rssi = extra_cache.rssi end
     if extra_cache.cell then payload.cell = extra_cache.cell end
+    payload.version = _G.VERSION or ""
     return payload
 end
 
@@ -297,8 +299,8 @@ function main()
     end
     log.info("GNSS", "network ready")
     gpio.set(PIN_NET_LED, 1)
-    -- 联网后执行一次 FOTA（自建服务器）
-    if libfota and libfota.request then
+    -- 联网后执行一次 FOTA（从 config.cfg 的 fota_url 读取地址，留空则不请求）
+    if libfota and libfota.request and (cfg.fota_url or ""):match("%S") then
         local function fota_cb(result)
             -- 0=成功 1=连接失败 2=url错误 3=服务器断开 4=接收错误 5=VERSION需xxx.yyy.zzz或缺少PRODUCT_KEY
             log.info("GNSS", "FOTA result: " .. tostring(result))
@@ -309,7 +311,8 @@ function main()
         end
         local ver = _G.VERSION or "1.0.1"
         local imei = (mobile and mobile.imei and mobile.imei()) or ""
-        local url = "http://luatos-fota.ctsdn.com:2232/upgrade?version=" .. ver .. "&imei=" .. (imei ~= "" and imei or "unknown")
+        local base = (cfg.fota_url or ""):gsub("%?.*$", "")
+        local url = base .. "?version=" .. ver .. "&imei=" .. (imei ~= "" and imei or "unknown")
         libfota.request(fota_cb, url)
     end
     if socket and socket.sntp then
