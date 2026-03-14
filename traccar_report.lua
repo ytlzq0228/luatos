@@ -14,6 +14,8 @@ local queue = {}
 local consumer_params = nil  -- {host, port, device_id, timeout_s, max_backoff}
 local queue_max = 200
 
+local cmd_osmand = require("cmd_osmand")
+
 local function load_config()
     local ok, cfg = pcall(require("config").load_config)
     if not ok or not cfg then
@@ -34,6 +36,40 @@ local function build_query(device_id, payload)
         end
     end
     return table.concat(t, "&")
+end
+
+local function url_encode(s)
+    if not s then return "" end
+    s = tostring(s):gsub("\r\n", "\n"):gsub("\r", "\n")
+    return (s:gsub("%%", "%%25"):gsub("&", "%%26"):gsub("=", "%%3D"):gsub(" ", "%%20"):gsub("\n", "%%0A"))
+end
+
+-- 仅上报指令执行结果：只带 id 与 lastCmdResult
+local function send_cmd_result(host, port, device_id, last_cmd_result, timeout_s)
+    timeout_s = timeout_s or 10
+    local qs = "id=" .. tostring(device_id) .. "&lastCmdResult=" .. url_encode(last_cmd_result)
+    local url = "http://" .. host .. ":" .. tostring(port) .. "/?" .. qs
+    local host_header = host .. ":" .. tostring(port)
+    local headers = {
+        ["Host"] = host_header,
+        ["User-Agent"] = "LuatOS-GNSS-Reporter/1.0",
+        ["Connection"] = "close",
+    }
+    local code
+    local ok, err = pcall(function()
+        local r = http.request("GET", url, headers, nil, {timeout = timeout_s * 1000})
+        if r and r.wait then
+            code = r.wait()
+        else
+            err = "http.request no wait"
+        end
+    end)
+    if ok and code and (code == 200 or code == 204) then
+        log.info("Traccar", "Cmd result reported: " .. tostring(last_cmd_result):sub(1, 80))
+        return true
+    end
+    log.warn("Traccar", "Report cmd result failed: " .. tostring(err or code))
+    return false
 end
 
 local function send_position(host, port, device_id, payload, timeout_s)
@@ -64,20 +100,31 @@ local function send_position(host, port, device_id, payload, timeout_s)
         body = resp_headers
         resp_headers = nil
     end
-    -- 打印 Traccar HTTP 响应；body 里会填充服务器下发的指令原文（有排队指令时）
-    log.info("Traccar", "[RESP] code=" .. tostring(code))
-    if resp_headers and type(resp_headers) == "table" then
-        for k, v in pairs(resp_headers) do
-            log.info("Traccar", "[RESP] Header: " .. tostring(k) .. "=" .. tostring(v))
-        end
-    elseif resp_headers and resp_headers ~= "" and type(resp_headers) ~= "string" then
-        log.info("Traccar", "[RESP] Headers: " .. tostring(resp_headers))
-    end
+    -- 仅当响应带指令 body 时打印响应与指令
     if body and body ~= "" then
+        log.info("Traccar", "[RESP] code=" .. tostring(code))
+        if resp_headers and type(resp_headers) == "table" then
+            for k, v in pairs(resp_headers) do
+                log.info("Traccar", "[RESP] Header: " .. tostring(k) .. "=" .. tostring(v))
+            end
+        elseif resp_headers and resp_headers ~= "" and type(resp_headers) ~= "string" then
+            log.info("Traccar", "[RESP] Headers: " .. tostring(resp_headers))
+        end
         log.info("Traccar", "[RESP] body(len=" .. tostring(#body) .. "): " .. (body:sub(1, 512) .. (#body > 512 and "..." or "")))
-        log.info("Traccar", "[RESP] 收到服务器指令(原文): " .. (body:sub(1, 256) .. (#body > 256 and "..." or "")))
-    else
-        log.info("Traccar", "[RESP] body: (empty)")
+        log.info("Traccar", "[RESP] server command (raw): " .. (body:sub(1, 256) .. (#body > 256 and "..." or "")))
+        local last_result, need_reboot = cmd_osmand.execute(body)
+        log.info("Traccar", "[CMD] LastCmdResult=" .. tostring(last_result) .. " RebootRequest=" .. tostring(need_reboot))
+        send_cmd_result(host, port, device_id, last_result, timeout_s)
+        if not ok or not code then
+            return SEND_RETRY, last_result, need_reboot
+        end
+        if code < 0 then
+            return SEND_RETRY, last_result, need_reboot
+        end
+        if code == 200 or code == 204 then
+            return SEND_OK, last_result, need_reboot
+        end
+        return SEND_RETRY, last_result, need_reboot
     end
     if not ok or not code then
         log.error("Traccar", "send_position error: " .. tostring(err or code or "unknown"))
@@ -136,14 +183,26 @@ local function consumer_loop()
             goto continue
         end
         local payload = item.payload or {}
-        local r = send_position(host, port, device_id, payload, timeout_s)
+        local r, cmd_result, need_reboot = send_position(host, port, device_id, payload, timeout_s)
         if r == SEND_OK then
             log.info("Traccar", "Sent " .. tostring(payload.lat) .. " " .. tostring(payload.lon))
+            if need_reboot then
+                log.info("Traccar", "Reboot requested, rebooting...")
+                pcall(function()
+                    if rtos and rtos.reboot then rtos.reboot() end
+                end)
+            end
         elseif r == SEND_RETRY then
             item.attempts = (item.attempts or 0) + 1
             item.next_ts = os.time() + math.min(max_backoff, item.attempts * RETRY_BACKOFF_BASE_SEC)
             table.insert(queue, item)
             log.warn("Traccar", "retry later, backoff " .. tostring(item.next_ts - os.time()))
+            if need_reboot then
+                log.info("Traccar", "Reboot requested, rebooting...")
+                pcall(function()
+                    if rtos and rtos.reboot then rtos.reboot() end
+                end)
+            end
         end
         ::continue::
     end

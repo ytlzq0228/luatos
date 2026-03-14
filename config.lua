@@ -1,8 +1,10 @@
 -- config.lua - 统一配置文件读取（Traccar / APRS / LBS 等）
--- 从 config.cfg 读取 key=value，与 QuecPython 版格式兼容
+-- 仅使用根目录 /config.cfg：首次运行若不存在则从源路径复制一份，后续只对该文件读写
 
--- Air780EP 常见：脚本在 /luadb/，先尝试该路径及相对路径
-local CONFIG_PATHS = {"/luadb/config.cfg", "config.cfg", "/config.cfg", "/luatos/config.cfg"}
+local log = log
+local CONFIG_FILE = "/config.cfg"
+-- 首次复制时尝试的源路径（按顺序，找到即复制到 /config.cfg）
+local SOURCE_PATHS = {"/luadb/config.cfg", "config.cfg", "/config.cfg", "/data/config.cfg", "/luatos/config.cfg"}
 local APRS_MIN_INTERVAL = 30
 
 local function _int_val(v, default)
@@ -19,29 +21,138 @@ local function _float_val(v, default)
     return default
 end
 
-local function _read_raw()
-    for _, path in ipairs(CONFIG_PATHS) do
-        local f = io.open(path, "r")
-        if f then
-            local cfg = {}
-            for line in f:lines() do
-                line = line:match("^%s*(.-)%s*$")
-                if line ~= "" and not line:match("^#") then
-                    local k, v = line:match("^([^=]+)=(.*)$")
-                    if k and v then
-                        cfg[k:match("^%s*(.-)%s*$")] = v:match("^%s*(.-)%s*$")
-                    end
-                end
-            end
-            f:close()
-            return cfg
-        end
+local function _read_lines(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local lines = {}
+    for line in f:lines() do
+        lines[#lines + 1] = line
     end
-    return {}
+    f:close()
+    return lines
 end
 
-local function load_config()
+local function _write_lines(path, lines)
+    local f = io.open(path, "w")
+    if not f then return false end
+    for _, line in ipairs(lines) do
+        f:write(line .. "\n")
+    end
+    f:close()
+    return true
+end
+
+-- 若 /config.cfg 不存在，从第一个存在的源路径复制一份过去
+local function _ensure_config()
+    local f = io.open(CONFIG_FILE, "r")
+    if f then
+        f:close()
+        return true
+    end
+    for _, path in ipairs(SOURCE_PATHS) do
+        if path == CONFIG_FILE then goto next end
+        local lines = _read_lines(path)
+        if lines and #lines > 0 then
+            if _write_lines(CONFIG_FILE, lines) then
+                log.info("Config", "copied from " .. path .. " to " .. CONFIG_FILE)
+                return true
+            end
+        end
+        ::next::
+    end
+    return false
+end
+
+-- 从 /config.cfg 读取原始 key=value 表（先确保文件存在）
+local function _read_raw()
+    _ensure_config()
+    local f = io.open(CONFIG_FILE, "r")
+    if not f then return {} end
+    local cfg = {}
+    for line in f:lines() do
+        line = line:match("^%s*(.-)%s*$")
+        if line ~= "" and not line:match("^#") then
+            local k, v = line:match("^([^=]+)=(.*)$")
+            if k and v then
+                cfg[k:match("^%s*(.-)%s*$")] = v:match("^%s*(.-)%s*$")
+            end
+        end
+    end
+    f:close()
+    return cfg
+end
+
+-- 打印从 cfg 文件读取到的所有 key=value
+local function _log_cfg(cfg)
+    if not cfg or not log then return end
+    local keys = {}
+    for k in pairs(cfg) do keys[#keys + 1] = k end
+    table.sort(keys)
+    for _, k in ipairs(keys) do
+        log.info("Config", k .. "=" .. tostring(cfg[k]))
+    end
+end
+
+-- 读取 cfg 中原始 key 的值（不经过 load_config 的转换）
+function get_raw_value(key)
     local cfg = _read_raw()
+    return cfg[key]
+end
+
+-- 读取 cfg 中全部 key=value（表，供 GET ALL 等使用）
+function get_all_raw()
+    return _read_raw()
+end
+
+-- 设置 cfg 中 key=value，不存在则追加；仅操作 /config.cfg
+function set_raw_key(key, value)
+    if not _ensure_config() then return false end
+    local lines = _read_lines(CONFIG_FILE)
+    if not lines then return false end
+    local key_trim = key and key:match("^%s*(.-)%s*$")
+    if not key_trim or key_trim == "" then return false end
+    local new_line = key_trim .. "=" .. tostring(value)
+    local found = false
+    for i, line in ipairs(lines) do
+        local k = line:match("^%s*([^=]+)=")
+        if k and k:match("^%s*(.-)%s*$") == key_trim then
+            lines[i] = new_line
+            found = true
+            break
+        end
+    end
+    if not found then
+        lines[#lines + 1] = new_line
+    end
+    return _write_lines(CONFIG_FILE, lines)
+end
+
+-- 删除 cfg 中 key；traccar_host、traccar_port 不允许删除
+function del_raw_key(key)
+    if key == "traccar_host" or key == "traccar_port" then return false end
+    if not _ensure_config() then return false, nil end
+    local lines = _read_lines(CONFIG_FILE)
+    if not lines then return false, nil end
+    local key_trim = key and key:match("^%s*(.-)%s*$")
+    if not key_trim or key_trim == "" then return false, nil end
+    local removed_value = nil
+    local new_lines = {}
+    for _, line in ipairs(lines) do
+        local k, v = line:match("^%s*([^=]+)=(.*)$")
+        if k and k:match("^%s*(.-)%s*$") == key_trim then
+            removed_value = v and v:match("^%s*(.-)%s*$") or ""
+        else
+            new_lines[#new_lines + 1] = line
+        end
+    end
+    if removed_value == nil then return false, nil end
+    return _write_lines(CONFIG_FILE, new_lines), removed_value
+end
+
+function load_config()
+    local cfg = _read_raw()
+    _log_cfg(cfg)
+
     local raw_aprs = _int_val(cfg.aprs_interval, 60)
     local aprs_interval = math.max(APRS_MIN_INTERVAL, raw_aprs)
 
@@ -87,4 +198,8 @@ end
 return {
     load_config = load_config,
     APRS_MIN_INTERVAL = APRS_MIN_INTERVAL,
+    get_raw_value = get_raw_value,
+    get_all_raw = get_all_raw,
+    set_raw_key = set_raw_key,
+    del_raw_key = del_raw_key,
 }
