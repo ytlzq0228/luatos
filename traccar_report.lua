@@ -16,14 +16,16 @@ local queue_max = 200
 
 local cmd_osmand = require("cmd_osmand")
 
+-- 若由主流程传入完整 cfg，可直接用；否则自行加载（供独立调用时使用）
 local function load_config()
     local ok, cfg = pcall(require("config").load_config)
     if not ok or not cfg then
-        return { traccar_host = "", traccar_port = 5055, traccar_max_backoff = 60 }
+        return { traccar_host = "", traccar_port = 5055, traccar_http_timeout = 10, traccar_max_backoff = 60 }
     end
     return {
         traccar_host = cfg.traccar_host or "",
         traccar_port = cfg.traccar_port or 5055,
+        traccar_http_timeout = cfg.traccar_http_timeout or 10,
         traccar_max_backoff = cfg.traccar_max_backoff or 60,
     }
 end
@@ -212,15 +214,16 @@ local function consumer_loop()
     end
 end
 
-function start_consumer(traccar_cfg, device_id)
-    local host = (traccar_cfg.traccar_host or ""):gsub("^%s*(.-)%s*$", "%1")
+-- 入参可为完整 config（来自 gnss_reporter）或仅含 traccar_* 的子集（来自 load_config）
+function start_consumer(cfg, device_id)
+    local host = (cfg.traccar_host or ""):gsub("^%s*(.-)%s*$", "%1")
     if host == "" then return end
     consumer_params = {
         host = host,
-        port = traccar_cfg.traccar_port or 5055,
+        port = cfg.traccar_port or 5055,
         device_id = device_id,
-        timeout_s = 10,
-        max_backoff = traccar_cfg.traccar_max_backoff or 60,
+        timeout_s = cfg.traccar_http_timeout or 10,
+        max_backoff = cfg.traccar_max_backoff or 60,
     }
     if cache_exists(TRACCAR_CACHE_FILE) then
         local f = io.open(TRACCAR_CACHE_FILE, "r")

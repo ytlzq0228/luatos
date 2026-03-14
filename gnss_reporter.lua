@@ -2,6 +2,8 @@
 -- 功能：外置 GNSS(UART2+GPIO22)；无 GNSS 时可选 LBS；Traccar/APRS 异步上报。
 -- 不加 OLED、不加 PowerKey，加电直接运行。
 -- 硬件：串口1 TTL | ADC0 供电电压 | NET LED 27 | Reload 30 | 高电平入 41 | NPN 24 | 看门狗 28 | 震动 39 | GPS 串口2+电源 22
+--
+-- 依赖：config, battery, cell_info, traccar_report, aprs_report；可选 lbsLoc2, air153C_wtd
 
 local sys = sys
 local log = log
@@ -26,7 +28,6 @@ local PIN_HIGH_IN = 41    -- 高电平输入，输入上拉，低电平触发
 local UART_GPS_ID = 2      -- GPS 使用串口 2
 local GPS_BAUD = 115200   -- ATGM336H 等北斗/GPS 模块常用 115200，部分模块为 9600
 local WDT_FEED_INTERVAL_MS = 150 * 1000  -- 150 秒喂狗
-local FLASH_CHECK_INTERVAL_TICKS = 30
 local VERSION = "1.0.0-luatos"
 
 local config = require("config")
@@ -43,9 +44,9 @@ local gps_data = {
     sats = 0, hdop = nil, fix = "0", accuracy = nil, _source = nil,
 }
 local gps_buf = ""
+-- 由后台任务每 30 秒刷新，主流程只读
 local extra_cache = {}
-local extra_cache_interval_ms = 10 * 1000
-local last_extra_ts = 0
+local EXTRA_CACHE_INTERVAL_SEC = 30
 
 local function load_config()
     local ok, cfg = pcall(config.load_config)
@@ -141,10 +142,35 @@ local function get_device_id()
     return "Air780EP"
 end
 
--- LBS：若配置了自定义 lbs_server 可在此扩展 HTTP 请求；否则可用 lbsLoc2（需 productKey 等）
+-- LBS：未配置 lbs_server 时使用 LuatOS 内置 lbsLoc2（合宙单基站定位）；否则可扩展自定义 HTTP
+-- 文档: https://wiki.luatos.com/api/libs/lbsLoc2.html
 local function get_lbs_location(cfg)
-    if (cfg.lbs_server or "") == "" then return nil, nil, nil end
-    -- 自定义 LBS 服务器需按接口实现 HTTP 请求，此处留空
+    local custom_server = (cfg.lbs_server or ""):match("%S")
+    if custom_server then
+        -- 自定义 LBS 服务器需按接口实现 HTTP 请求，此处留空
+        return nil, nil, nil
+    end
+    -- 使用 lbsLoc2：必须在协程中调用（本函数已在 main 的 sys.taskInit 内）
+    local ok, lbsLoc2 = pcall(require, "lbsLoc2")
+    if not ok or not lbsLoc2 or not lbsLoc2.request then
+        log.warn("GNSS", "lbsLoc2 not available")
+        return nil, nil, nil
+    end
+    if not mobile or not mobile.reqCellInfo then
+        log.warn("GNSS", "mobile.reqCellInfo not available for LBS")
+        return nil, nil, nil
+    end
+    local timeout_ms = math.max(5000, math.min(60000, (cfg.lbs_timeout or 30) * 1000))
+    -- 部分模组不发布 CELL_INFO_UPDATE，先 reqCellInfo 后短时等待再请求；lbsLoc2 内部会优先用 mobile.scell()
+    mobile.reqCellInfo(15)
+    if sys.waitUntil and sys.waitUntil("CELL_INFO_UPDATE", 3000) ~= "CELL_INFO_UPDATE" then
+        sys.wait(2000)  -- 无事件时再等 2 秒让模组更新基站信息，避免 16 秒阻塞
+    end
+    local lat, lng = lbsLoc2.request(timeout_ms, nil, nil, false)
+    if lat and lng then
+        local acc = 250  -- 单基站定位精度约 1.5km
+        return tonumber(lat), tonumber(lng), acc
+    end
     return nil, nil, nil
 end
 
@@ -152,16 +178,32 @@ local function get_utc_timestamp()
     return os.time()
 end
 
-local function refresh_extra_cache()
-    if os.time() - last_extra_ts < 10 then return end
-    last_extra_ts = os.time()
-    if mobile and mobile.csq then
-        local csq = mobile.csq()
-        if csq then extra_cache.rssi = csq end
+-- 后台任务：每 30 秒刷新 rssi/cell 到 extra_cache，主流程只读缓存不阻塞
+local function _extra_cache_loop()
+    local function do_refresh()
+        pcall(function()
+            if mobile and mobile.csq then
+                local csq = mobile.csq()
+                if csq then extra_cache.rssi = csq end
+            end
+        end)
+        pcall(function()
+            if cell_info and cell_info.get_cell_info then
+                extra_cache.cell = cell_info.get_cell_info()
+            end
+        end)
     end
-    if cell_info and cell_info.get_cell_info then
-        extra_cache.cell = cell_info.get_cell_info()
+    sys.wait(2000)  -- 启动后 2 秒做首次刷新
+    do_refresh()
+    while true do
+        sys.wait(EXTRA_CACHE_INTERVAL_SEC * 1000)
+        do_refresh()
     end
+end
+
+local function start_extra_cache_task()
+    sys.taskInit(_extra_cache_loop)
+    log.info("GNSS", "extra_cache task started, interval=" .. EXTRA_CACHE_INTERVAL_SEC .. "s")
 end
 
 local function build_traccar_payload(device_id, lat, lon)
@@ -259,13 +301,13 @@ function main()
     if cfg.wdt_period and cfg.wdt_period > 0 then
         wdt_init()
     end
-    local traccar_cfg = traccar_report.load_config()
-    if (traccar_cfg.traccar_host or ""):match("%S") then
-        traccar_report.start_consumer(traccar_cfg, device_id)
+    -- 配置只加载一次，Traccar/APRS 使用同一 cfg，避免重复读文件
+    if (cfg.traccar_host or ""):match("%S") then
+        traccar_report.start_consumer(cfg, device_id)
+        start_extra_cache_task()
     end
-    local aprs_cfg = aprs_report.load_config()
-    if (aprs_cfg.aprs_callsign or ""):match("%S") then
-        aprs_report.start_consumer(aprs_cfg)
+    if (cfg.aprs_callsign or ""):match("%S") then
+        aprs_report.start_consumer(cfg)
     end
     if cfg.test_report_mode == 1 and cfg.test_lat and cfg.test_lon then
         log.info("GNSS", "TEST MODE: lat=" .. tostring(cfg.test_lat) .. " lon=" .. tostring(cfg.test_lon))
@@ -278,11 +320,9 @@ function main()
     local last_nofix_report_ts = 0  -- 无定位时按 still_interval 上报状态（电量/信号等）
     local last_lbs_ts = 0
     local last_aprs_ts = 0
-    local tick = 0
     local last_wdt_ts = 0
     while true do
         sys.wait(1000)
-        tick = tick + 1
         if cfg.wdt_period and cfg.wdt_period > 0 and os.time() - last_wdt_ts >= 150 then
             wdt_feed()
             last_wdt_ts = os.time()
@@ -291,7 +331,6 @@ function main()
             log.info("GNSS", "Reload asserted, exit.")
             break
         end
-        refresh_extra_cache()
         gnss_read_once()
         local lat, lon = gps_data.lat, gps_data.lon
         local no_gnss = (lat == nil or lon == nil or gps_data.fix == "0")
@@ -307,7 +346,8 @@ function main()
             gps_data.sats = 8
             gps_data._source = "TEST"
         end
-        if no_gnss and (cfg.lbs_server or ""):match("%S") then
+        -- 无 GNSS 时：若配置了 lbs_interval 则尝试 LBS（不填 lbs_server 则用内置 lbsLoc2）
+        if no_gnss and (cfg.lbs_interval or 0) >= 10 then
             if last_lbs_ts == 0 or (os.time() - last_lbs_ts) >= (cfg.lbs_interval or 60) then
                 last_lbs_ts = os.time()
                 local lbs_lat, lbs_lon, lbs_acc = get_lbs_location(cfg)
@@ -324,9 +364,8 @@ function main()
             gps_data._source = "GNSS"
         end
         if not lat or not lon then
-            -- 无定位时仍按 still_interval 上报除定位以外的信息（电量、信号、基站等）
+            -- 无定位时仍按 still_interval 上报除定位以外的信息（电量、信号、基站等，从缓存读）
             if (os.time() - last_nofix_report_ts) >= still_interval then
-                refresh_extra_cache()
                 local status_payload = build_traccar_status_payload(device_id)
                 traccar_report.enqueue(status_payload)
                 last_nofix_report_ts = os.time()
@@ -334,8 +373,8 @@ function main()
             end
             goto continue
         end
-        if (aprs_cfg.aprs_callsign or ""):match("%S") then
-            local interval = aprs_cfg.aprs_interval or 60
+        if (cfg.aprs_callsign or ""):match("%S") then
+            local interval = cfg.aprs_interval or 60
             if (os.time() - last_aprs_ts) >= interval then
                 aprs_report.enqueue(gps_data)
                 last_aprs_ts = os.time()

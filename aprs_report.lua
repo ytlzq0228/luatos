@@ -16,6 +16,7 @@ local queue_max = 100
 local queue = {}
 local aprs_cfg = nil
 
+-- 若由主流程传入完整 cfg，start_consumer 直接使用；否则可调用本函数加载（供独立调用时使用）
 local function load_config()
     local ok, cfg = pcall(require("config").load_config)
     if not ok or not cfg then
@@ -203,6 +204,7 @@ local function consumer_loop()
     end
 end
 
+-- 入参可为完整 config（来自 gnss_reporter）或仅含 aprs_* 的子集（来自 load_config）
 function start_consumer(cfg)
     local callsign = (cfg.aprs_callsign or ""):gsub("^%s*(.-)%s*$", "%1")
     if callsign == "" then return end
