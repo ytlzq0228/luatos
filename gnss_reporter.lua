@@ -184,6 +184,20 @@ local function build_traccar_payload(device_id, lat, lon)
     return payload
 end
 
+-- 无定位时上报的状态 payload：仅含设备 id、时间戳、电量、信号、基站等（无 lat/lon）
+local function build_traccar_status_payload(device_id)
+    local payload = {
+        id = device_id,
+        timestamp = get_utc_timestamp(),
+    }
+    local l, v = battery.get_battery()
+    if l then payload.batteryLevel = string.format("%.1f", l) end
+    if v then payload.batteryVoltage = v end
+    if extra_cache.rssi then payload.rssi = extra_cache.rssi end
+    if extra_cache.cell then payload.cell = extra_cache.cell end
+    return payload
+end
+
 local function gpio_setup()
     if gpio then
         pcall(function() gpio.setup(PIN_NET_LED, 0, gpio.PULLUP) end)   -- 输出，默认低
@@ -261,6 +275,7 @@ function main()
     local still_speed_threshold = cfg.still_speed_threshold or 5
     local last_report_ts = 0
     local last_still_report_ts = 0
+    local last_nofix_report_ts = 0  -- 无定位时按 still_interval 上报状态（电量/信号等）
     local last_lbs_ts = 0
     local last_aprs_ts = 0
     local tick = 0
@@ -309,6 +324,14 @@ function main()
             gps_data._source = "GNSS"
         end
         if not lat or not lon then
+            -- 无定位时仍按 still_interval 上报除定位以外的信息（电量、信号、基站等）
+            if (os.time() - last_nofix_report_ts) >= still_interval then
+                refresh_extra_cache()
+                local status_payload = build_traccar_status_payload(device_id)
+                traccar_report.enqueue(status_payload)
+                last_nofix_report_ts = os.time()
+                log.info("GNSS", "no fix, status report enqueued (still_interval)")
+            end
             goto continue
         end
         if (aprs_cfg.aprs_callsign or ""):match("%S") then

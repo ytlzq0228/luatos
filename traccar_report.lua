@@ -185,7 +185,11 @@ local function consumer_loop()
         local payload = item.payload or {}
         local r, cmd_result, need_reboot = send_position(host, port, device_id, payload, timeout_s)
         if r == SEND_OK then
-            log.info("Traccar", "Sent " .. tostring(payload.lat) .. " " .. tostring(payload.lon))
+            if payload.lat and payload.lon then
+                log.info("Traccar", "Sent " .. tostring(payload.lat) .. " " .. tostring(payload.lon))
+            else
+                log.info("Traccar", "Sent status (no position)")
+            end
             if need_reboot then
                 log.info("Traccar", "Reboot requested, rebooting...")
                 pcall(function()
