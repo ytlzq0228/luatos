@@ -192,8 +192,8 @@ function load_config()
         test_speed = _float_val(cfg.test_speed, 0),
         test_course = _float_val(cfg.test_course, 156),
         test_accuracy = _float_val(cfg.test_accuracy, 12),
-        -- FOTA：留空则不请求升级
-        fota_url = (cfg.fota_url or ""):gsub("^%s*(.-)%s*$", "%1"),
+        -- FOTA：配置里没有 fota_url 时用默认地址；显式写 fota_url= 留空则不请求
+        fota_url = (cfg.fota_url == nil) and "http://luatos-fota.ctsdn.com:2232/upgrade" or (cfg.fota_url or ""):gsub("^%s*(.-)%s*$", "%1"),
     }
 end
 

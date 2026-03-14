@@ -299,8 +299,10 @@ function main()
     end
     log.info("GNSS", "network ready")
     gpio.set(PIN_NET_LED, 1)
-    -- 联网后执行一次 FOTA（从 config.cfg 的 fota_url 读取地址，留空则不请求）
-    if libfota and libfota.request and (cfg.fota_url or ""):match("%S") then
+    -- 联网后执行一次 FOTA（地址来自 config：未配置则默认，显式留空则不请求）
+    local fota_base = (cfg.fota_url or ""):gsub("^%s*(.-)%s*$", "%1")
+    if libfota and libfota.request and fota_base ~= "" then
+        log.info("GNSS", "FOTA url: " .. fota_base)
         local function fota_cb(result)
             -- 0=成功 1=连接失败 2=url错误 3=服务器断开 4=接收错误 5=VERSION需xxx.yyy.zzz或缺少PRODUCT_KEY
             log.info("GNSS", "FOTA result: " .. tostring(result))
@@ -311,7 +313,7 @@ function main()
         end
         local ver = _G.VERSION or "1.0.1"
         local imei = (mobile and mobile.imei and mobile.imei()) or ""
-        local base = (cfg.fota_url or ""):gsub("%?.*$", "")
+        local base = fota_base:gsub("%?.*$", "")
         local url = base .. "?version=" .. ver .. "&imei=" .. (imei ~= "" and imei or "unknown")
         libfota.request(fota_cb, url)
     end
