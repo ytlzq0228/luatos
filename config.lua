@@ -42,11 +42,61 @@ local function _write_lines(path, lines)
     return true
 end
 
--- 若 /config.cfg 不存在，从第一个存在的源路径复制一份过去
+-- 从行列表解析出 key=value 表（不触发 _ensure_config，避免递归）
+local function _lines_to_cfg(lines)
+    local cfg = {}
+    for _, line in ipairs(lines or {}) do
+        line = line:match("^%s*(.-)%s*$")
+        if line ~= "" and not line:match("^#") then
+            local k, v = line:match("^([^=]+)=(.*)$")
+            if k and v then
+                cfg[k:match("^%s*(.-)%s*$")] = v:match("^%s*(.-)%s*$")
+            end
+        end
+    end
+    return cfg
+end
+
+-- 当 /config.cfg 已存在时，用程序包里的 cfg 做比对，补上设备中缺失的 key（程序更新后包内 cfg 可能有新 key）
+local function _merge_missing_keys()
+    local bundle_lines = nil
+    local bundle_path = nil
+    for _, path in ipairs(SOURCE_PATHS) do
+        if path == CONFIG_FILE then goto next end
+        local lines = _read_lines(path)
+        if lines and #lines > 0 then
+            bundle_lines = lines
+            bundle_path = path
+            break
+        end
+        ::next::
+    end
+    if not bundle_lines then return end
+    local bundle_cfg = _lines_to_cfg(bundle_lines)
+    local dev_lines = _read_lines(CONFIG_FILE)
+    if not dev_lines then return end
+    local dev_cfg = _lines_to_cfg(dev_lines)
+    local added = {}
+    for k, val in pairs(bundle_cfg) do
+        if dev_cfg[k] == nil then
+            dev_lines[#dev_lines + 1] = k .. "=" .. val
+            added[#added + 1] = k
+        end
+    end
+    if #added > 0 then
+        _write_lines(CONFIG_FILE, dev_lines)
+        if log and bundle_path then
+            log.info("Config", "merged from " .. bundle_path .. " missing keys: " .. table.concat(added, ", "))
+        end
+    end
+end
+
+-- 若 /config.cfg 不存在，从第一个存在的源路径复制一份过去；若已存在则仅补全缺失的 key
 local function _ensure_config()
     local f = io.open(CONFIG_FILE, "r")
     if f then
         f:close()
+        _merge_missing_keys()
         return true
     end
     for _, path in ipairs(SOURCE_PATHS) do
