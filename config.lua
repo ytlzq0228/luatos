@@ -244,6 +244,8 @@ function load_config()
         test_accuracy = _float_val(cfg.test_accuracy, 12),
         -- FOTA：配置里没有 fota_url 时用默认地址；显式写 fota_url= 留空则不请求
         fota_url = (cfg.fota_url == nil) and "http://luatos-fota.ctsdn.com:2232/upgrade" or (cfg.fota_url or ""):gsub("^%s*(.-)%s*$", "%1"),
+        -- 电池类型：用于 SOC 曲线选择 Li_1S_3V7 / Li_3S_12V / Li_13S_48V / SLA_4S_48V / SLA_5S_60V
+        battery_type = (cfg.battery_type or "Li_1S_3V7"):gsub("^%s*(.-)%s*$", "%1"),
     }
 end
 
