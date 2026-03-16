@@ -221,6 +221,7 @@ local function build_traccar_payload(device_id, lat, lon)
     if gps_data.alt then payload.altitude = string.format("%.1f", gps_data.alt) end
     if gps_data.sats then payload.sat = gps_data.sats end
     if gps_data.accuracy then payload.accuracy = string.format("%.1f", gps_data.accuracy) end
+    if gps_data._source then payload.source = gps_data._source end
     local l, v = battery.get_battery()
     if l then payload.batteryLevel = string.format("%.1f", l) end
     if v then payload.batteryVoltage = v end
